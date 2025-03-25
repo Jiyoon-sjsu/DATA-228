@@ -48,6 +48,7 @@ async def create_cassandra_session():
         timestamp TIMESTAMP,
         scheduled_lecture_time TEXT,
         actual_attendance_time TIMESTAMP,
+        status TEXT, 
         PRIMARY KEY (student_id, lecture_id)
     );
     """
@@ -75,14 +76,14 @@ def init_hyperloglog(lecture_id):
 
 
 # Insert attendance record into Cassandra
-async def insert_attendance_record(session, student_id, lecture_id, scheduled_time, actual_attendance_time):
+async def insert_attendance_record(session, student_id, lecture_id, scheduled_time, actual_attendance_time, status):
     query = f"""
-    INSERT INTO {CASSANDRA_TABLE} (student_id, lecture_id, timestamp, scheduled_lecture_time, actual_attendance_time)
-    VALUES (%s, %s, %s, %s, %s)
+    INSERT INTO {CASSANDRA_TABLE} (student_id, lecture_id, timestamp, scheduled_lecture_time, actual_attendance_time, status)
+    VALUES (%s, %s, %s, %s, %s, %s)
     """
     print(f"Inserting attendance record into Cassandra: {student_id}, {lecture_id}, {actual_attendance_time}")
     statement = SimpleStatement(query)
-    session.execute(statement, (student_id, lecture_id, actual_attendance_time, scheduled_time, actual_attendance_time))
+    session.execute(statement, (student_id, lecture_id, actual_attendance_time, scheduled_time, actual_attendance_time, status))
     print(f"Attendance record for student {student_id} in lecture {lecture_id} inserted into Cassandra.")
 
 
@@ -93,6 +94,7 @@ async def process_message(session, msg):
     lecture_id = message_data['lecture_id']
     scheduled_lecture_time = message_data['scheduled_lecture_time']
     actual_attendance_time = datetime.fromisoformat(message_data['actual_attendance_time'])
+    status = message_data['status'] 
 
     print(f"Received message: {message_data}")
 
@@ -100,11 +102,12 @@ async def process_message(session, msg):
     if redis_client.execute_command("BF.EXISTS", BLOOM_FILTER_KEY, student_id):
         print(f"Student {student_id} is valid. Processing attendance.")
 
-        # Add the student to the HyperLogLog
-        init_hyperloglog(lecture_id)
+        # If the student is present, add them to HyperLogLog
+        if status == "present":
+            init_hyperloglog(lecture_id)
 
-        # Insert attendance record into Cassandra
-        await insert_attendance_record(session, student_id, lecture_id, scheduled_lecture_time, actual_attendance_time)
+        # Insert attendance record into Cassandra (regardless of status)
+        await insert_attendance_record(session, student_id, lecture_id, scheduled_lecture_time, actual_attendance_time, status)
     else:
         print(f"Student {student_id} is not in Bloom Filter. Adding to Bloom Filter.")
 
@@ -114,6 +117,9 @@ async def process_message(session, msg):
             print(f"Student {student_id} added to Bloom Filter.")
         except redis.exceptions.ResponseError:
             print(f"Student {student_id} already exists in Bloom Filter.")
+
+        # Insert attendance record into Cassandra
+        await insert_attendance_record(session, student_id, lecture_id, scheduled_lecture_time, actual_attendance_time, status)
 
 
 async def main():
