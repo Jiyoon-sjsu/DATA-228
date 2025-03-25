@@ -55,28 +55,32 @@ while True:
     if random.random() < 0.1:  # 10% chance of being late
         try:
             actual_attendance_time = simulate_lateness(scheduled_lecture_time)
+            attendance_status = "absent" if actual_attendance_time > (datetime.strptime(scheduled_lecture_time, "%H:%M") + timedelta(minutes=15)) else "present"
         except ValueError:
             continue  
     else:
         try:
             actual_attendance_time = handle_attendance_time(lecture_date_str, scheduled_lecture_time)
+            attendance_status = "present"
         except ValueError:
             continue 
 
-    # Create message with the student ID, lecture ID, and actual attendance timestamp
+    # Create message
     message_data = {
         "student_id": student_id,
         "lecture_id": lecture_id,
         "scheduled_lecture_time": scheduled_lecture_time, 
-        "actual_attendance_time": actual_attendance_time.isoformat(), 
+        "actual_attendance_time": actual_attendance_time.isoformat(),
+        "status": attendance_status
     }
 
+    # Send the message to Pulsar
     message = json.dumps(message_data).encode() 
     producer.send(message)
 
     print(f"Sent attendance message: {message_data}")
 
-    # Simulate a small delay between swipes (adjust as needed)
+    # Simulate a small delay between student swipes (adjust as needed)
     time.sleep(random.uniform(0.1, 0.5))  # Simulate variable delays in student swipes
 
 client.close()
