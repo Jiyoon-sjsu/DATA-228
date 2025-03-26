@@ -69,10 +69,10 @@ def init_bloom_filter():
 
 
 # Initialize HyperLogLog for a given lecture ID
-def init_hyperloglog(lecture_id):
-    print(f"Adding student to HyperLogLog for lecture {lecture_id}...")
-    redis_client.execute_command("PFADD", f"{HYPERLOGLOG_KEY_PREFIX}:{lecture_id}")
-    print(f"Student added to HyperLogLog for lecture {lecture_id}.")
+def init_hyperloglog(lecture_id, student_id):
+    print(f"Adding student {student_id} to HyperLogLog for lecture {lecture_id}...")
+    redis_client.execute_command("PFADD", f"{HYPERLOGLOG_KEY_PREFIX}:{lecture_id}", student_id)
+    print(f"Student {student_id} added to HyperLogLog for lecture {lecture_id}.")
 
 
 # Insert attendance record into Cassandra
@@ -104,9 +104,9 @@ async def process_message(session, msg):
 
         # If the student is present, add them to HyperLogLog
         if status == "present":
-            init_hyperloglog(lecture_id)
+            init_hyperloglog(lecture_id, student_id)
 
-        # Insert attendance record into Cassandra (regardless of status)
+        # Insert attendance record into Cassandra
         await insert_attendance_record(session, student_id, lecture_id, scheduled_lecture_time, actual_attendance_time, status)
     else:
         print(f"Student {student_id} is not in Bloom Filter. Adding to Bloom Filter.")
