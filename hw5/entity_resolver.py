@@ -61,35 +61,26 @@ def check_if_stream_exists():
         print(f"Ingest stream '{ingest_stream_name}' does not exist.")
         return False
 
-# Register ingest stream with Quine (only once)
-def create_ingest_stream():
-    if check_if_stream_exists():
-        return
-    url = f"{quine_url}/ingest/{ingest_stream_name}"
-    stream_definition = {
-        "type": "KafkaIngest",
-        "topics": [input_topic],
-        "bootstrapServers": f"{redpanda_host}:{redpanda_port}",
-        "groupId": "address-ingester",
-        "securityProtocol": "SASL_PLAINTEXT",
-        "saslMechanism": "SCRAM-SHA-256",
-        "saslUsername": "superuser",
-        "saslPassword": "secretpassword"
-    }
-
-    response = requests.post(url, json=stream_definition)
-    if response.status_code == 200:
-        print(f"Kafka ingest stream '{ingest_stream_name}' registered successfully.")
-    else:
-        print(f"Failed to create ingest stream '{ingest_stream_name}': {response.status_code}")
-        print(response.text)
-
 # Send JSON payload to Quine
 def ingest_to_quine(payload):
     try:
-        response = requests.post(quine_ingest_url, json=payload)
+        quine_payload = {
+            "type": "KafkaIngest",  # Include Kafka ingest type
+            "topics": [input_topic],  # Kafka topic
+            "bootstrapServers": f"{redpanda_host}:{redpanda_port}",  # Redpanda (Kafka) servers
+            "addressee": payload["addressee"],
+            "original": payload["original"],
+            "city": payload["city"],
+            "state": payload["state"],
+            "house": payload.get("house", "unknown"),
+            "houseNumber": payload.get("houseNumber", "unknown"),
+            "postcode": payload.get("postcode", "unknown"),
+            "road": payload.get("road", "unknown")
+        }
+
+        response = requests.post(quine_ingest_url, json=quine_payload)
         response.raise_for_status()
-        print("Ingested to Quine:", payload)
+        print("Ingested to Quine:", quine_payload)
     except requests.RequestException as e:
         print("Quine ingest failed:", e)
         if e.response is not None:
@@ -121,9 +112,9 @@ def insert_into_cassandra(resolved_entity):
 async def process_data(message, counter):
     try:
         raw_value = message.value().decode("utf-8")
-        print("Incoming Kafka message:", raw_value)
-
         data = json.loads(raw_value)
+
+        print(f"Received message: {data}")
 
         # Prepare resolved entity
         resolved_entity = {
@@ -149,6 +140,7 @@ async def process_data(message, counter):
             "topics": [input_topic],
             "bootstrapServers": f"{redpanda_host}:{redpanda_port}",
             "addressee": resolved_entity["addressee"],
+            "original": resolved_entity["original"],
             "poBox": data.get("poBox"),
             "postcode": data.get("postcode"),
             "city": data.get("city"),
@@ -170,7 +162,7 @@ async def process_data(message, counter):
 
 # Main loop to consume Kafka and ingest to Quine
 async def main():
-    create_ingest_stream()
+    # create_ingest_stream()
     consumer.subscribe([input_topic])
     print("Listening for messages on:", input_topic)
 
@@ -189,4 +181,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
