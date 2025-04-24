@@ -5,7 +5,7 @@ import uuid
 from uuid import UUID
 from confluent_kafka import Consumer, Producer
 from cassandra.cluster import Cluster
-import time
+import threading
 
 # Kafka (Redpanda) connection settings
 redpanda_host = "localhost"
@@ -59,24 +59,12 @@ def create_ingest_stream(ingest_stream_name):
         "saslPassword": "secretpassword"
     }
 
-    # Check if the stream already exists
-    try:
-        response = requests.get(url)  # Try to get the stream and check if it exists
-        if response.status_code == 200:
-            print(f"Stream {ingest_stream_name} already exists. Reusing.")
-            return True  # Stream exists, no need to create it
-    except requests.RequestException as e:
-        print("Error checking stream existence:", e)
-
-    # If it doesn't exist, create it
     response = requests.post(url, json=stream_definition)
     if response.status_code == 200:
         print(f"Kafka ingest stream '{ingest_stream_name}' registered successfully.")
-        return True
     else:
         print(f"Failed to create ingest stream '{ingest_stream_name}': {response.status_code}")
         print(response.text)
-    return False
 
 # Send JSON payload to Quine
 def ingest_to_quine(ingest_stream_name, payload):
@@ -126,49 +114,50 @@ async def process_data(message, counter):
 
         data = json.loads(raw_value)
 
-        # Use a shared stream name (for example, batch-based or time-based)
-        ingest_stream_name = "address-ingest-batch-1"  # Fixed stream name for the batch
+        # Generate a unique ingest stream name for each message or batch
+        ingest_stream_name = f"address-ingest-{uuid.uuid4()}"
 
-        # Create the ingest stream only once or periodically
-        if create_ingest_stream(ingest_stream_name):
-            # Extract fields from the incoming data dynamically
-            resolved_entity = {
-                "addressee": data.get("addressee", "unknown"),
-                "original": data.get("original", "unknown address"),
-                "parts": {
-                    "city": data.get("city", "unknown"),
-                    "house": data.get("house", "unknown"),
-                    "houseNumber": data.get("houseNumber", "unknown"),
-                    "postcode": data.get("postcode", "unknown"),
-                    "road": data.get("road", "unknown"),
-                    "state": data.get("state", "unknown")
-                },
-                "resolved": str(uuid.uuid4())  # Generate a new resolved UUID each time
-            }
+        # Create the ingest stream with the unique name
+        create_ingest_stream(ingest_stream_name)
 
-            # 1. Insert into Cassandra
-            insert_into_cassandra(resolved_entity)
+        # Extract fields from the incoming data dynamically
+        resolved_entity = {
+            "addressee": data.get("addressee", "unknown"),
+            "original": data.get("original", "unknown address"),
+            "parts": {
+                "city": data.get("city", "unknown"),
+                "house": data.get("house", "unknown"),
+                "houseNumber": data.get("houseNumber", "unknown"),
+                "postcode": data.get("postcode", "unknown"),
+                "road": data.get("road", "unknown"),
+                "state": data.get("state", "unknown")
+            },
+            "resolved": str(uuid.uuid4())  # Generate a new resolved UUID each time
+        }
 
-            # 2. Ingest to Quine
-            quine_payload = {
-                "meta": {
-                    "isPositiveMatch": True
-                },
-                "data": {
-                    "resolved_entity": resolved_entity
-                },
-                "type": "KafkaIngest",
-                "topics": [input_topic],
-                "bootstrapServers": f"{redpanda_host}:{redpanda_port}"
-            }
-            ingest_to_quine(ingest_stream_name, quine_payload)
+        # 1. Insert into Cassandra
+        insert_into_cassandra(resolved_entity)
 
-            # 3. Send to output Redpanda topic
-            send_to_output_topic(json.dumps(quine_payload))
+        # 2. Ingest to Quine
+        quine_payload = {
+            "meta": {
+                "isPositiveMatch": True
+            },
+            "data": {
+                "resolved_entity": resolved_entity
+            },
+            "type": "KafkaIngest",
+            "topics": [input_topic],
+            "bootstrapServers": f"{redpanda_host}:{redpanda_port}"
+        }
+        ingest_to_quine(ingest_stream_name, quine_payload)
 
-            # Increment counter
-            counter += 1
-            print(f"Processed message count: {counter}")
+        # 3. Send to output Redpanda topic
+        send_to_output_topic(json.dumps(quine_payload))
+
+        # Increment counter
+        counter += 1
+        print(f"Processed message count: {counter}")
 
     except Exception as e:
         print(f"Error processing message: {e}")
