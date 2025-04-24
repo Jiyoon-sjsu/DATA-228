@@ -37,7 +37,7 @@ cassandra_host = 'localhost'
 cassandra_port = 9042
 cassandra_keyspace = 'address_resolution'
 
-# Create Cassandra session 
+# Create Cassandra session
 def create_cassandra_session():
     cluster = Cluster([cassandra_host], port=cassandra_port)
     session = cluster.connect(cassandra_keyspace)
@@ -60,6 +60,30 @@ def check_if_stream_exists():
     else:
         print(f"Ingest stream '{ingest_stream_name}' does not exist.")
         return False
+
+# Create the ingest stream on Quine 
+def create_ingest_stream():
+    if not check_if_stream_exists():
+        # Define the Quine stream ingest config
+        stream_config = {
+            "type": "KafkaIngest", 
+            "topics": [input_topic], 
+            "bootstrapServers": f"{redpanda_host}:{redpanda_port}",
+            "groupId": "quine-consumer-group", 
+            "format": {
+                "type": "CypherJson",
+                "query": "MATCH (n:Address) RETURN n"  
+            }
+        }
+
+        try:
+            response = requests.post(f"{quine_url}/api/v1/ingest/{ingest_stream_name}", json=stream_config)
+            response.raise_for_status() 
+            print(f"Ingest stream '{ingest_stream_name}' created successfully.")
+        except requests.RequestException as e:
+            print(f"Failed to create ingest stream: {e}")
+            if e.response is not None:
+                print("Response text:", e.response.text)
 
 # Send JSON payload to Quine
 def ingest_to_quine(payload):
@@ -131,10 +155,10 @@ async def process_data(message, counter):
             "resolved": str(uuid.uuid4())  # Generate a new resolved UUID
         }
 
-        # 1. Insert into Cassandra
+        # Insert into Cassandra
         insert_into_cassandra(resolved_entity)
 
-        # 2. Ingest to Quine
+        # Ingest to Quine
         quine_payload = {
             "type": "KafkaIngest",
             "topics": [input_topic],
@@ -148,9 +172,9 @@ async def process_data(message, counter):
         }
         ingest_to_quine(quine_payload)
 
-        # 3. Send to output Redpanda topic
+        # Send to output Redpanda topic
         producer.produce(output_topic, json.dumps(quine_payload).encode("utf-8"))
-        producer.flush()  # Always flush producer to ensure messages are sent
+        producer.flush() 
 
         # Increment counter
         counter += 1
@@ -160,9 +184,11 @@ async def process_data(message, counter):
         print(f"Error processing message: {e}")
     return counter
 
-# Main loop to consume Kafka and ingest to Quine
+# Main loop to consume Redpanda and ingest to Quine
 async def main():
-    # create_ingest_stream()
+    # Create the ingest stream once at the start
+    create_ingest_stream()
+
     consumer.subscribe([input_topic])
     print("Listening for messages on:", input_topic)
 
@@ -181,5 +207,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 
